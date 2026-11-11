@@ -193,39 +193,51 @@ int main(int argc, char ** argv) {
         printf("impl,k,rows,median_ns,ns_per_elem,gbps,min_ns,sd_ns\n");
     }
 
-    // results[impl_index][k_index]
-    std::vector<std::vector<stats>> results(impls.size());
-    for (auto & v : results) {
+    // samples[impl_index][k_index][rep]; the two implementations are timed
+    // alternately inside each repetition so that the ratio between them is
+    // measured under the same clock and thermal state. Absolute times on this
+    // host drift by more than a factor of one between runs.
+    std::vector<std::vector<std::vector<double>>> samples(impls.size());
+    for (auto & v : samples) {
         v.resize(ks.size());
     }
 
-    for (size_t ii = 0; ii < impls.size(); ++ii) {
-        for (size_t ki = 0; ki < ks.size(); ++ki) {
-            const int64_t k  = ks[ki];
-            const size_t  nb = (size_t) (k / QK_K);
+    for (size_t ki = 0; ki < ks.size(); ++ki) {
+        const int64_t k  = ks[ki];
+        const size_t  nb = (size_t) (k / QK_K);
 
-            std::vector<float> x((size_t) k * (size_t) rows);
-            std::vector<block_q8_K> y(nb * (size_t) rows);
+        std::vector<float> x((size_t) k * (size_t) rows);
+        std::vector<block_q8_K> y(nb * (size_t) rows);
 
-            for (int64_t r = 0; r < rows; ++r) {
-                corpus_fill(Corpus::Uniform, x.data() + (size_t) r * (size_t) k, k, rng);
-            }
-            std::memset(y.data(), 0, y.size() * sizeof(block_q8_K));
+        for (int64_t r = 0; r < rows; ++r) {
+            corpus_fill(Corpus::Uniform, x.data() + (size_t) r * (size_t) k, k, rng);
+        }
+        std::memset(y.data(), 0, y.size() * sizeof(block_q8_K));
 
+        for (size_t ii = 0; ii < impls.size(); ++ii) {
             for (int w = 0; w < 3; ++w) {
                 run_rows(impls[ii], x.data(), y.data(), k, rows);
             }
+        }
 
-            std::vector<double> samples;
-            samples.reserve((size_t) reps);
-            for (int64_t rep = 0; rep < reps; ++rep) {
+        for (size_t ii = 0; ii < impls.size(); ++ii) {
+            samples[ii][ki].reserve((size_t) reps);
+        }
+        for (int64_t rep = 0; rep < reps; ++rep) {
+            for (size_t ii = 0; ii < impls.size(); ++ii) {
                 const uint64_t t0 = now_ns();
                 run_rows(impls[ii], x.data(), y.data(), k, rows);
                 const uint64_t t1 = now_ns();
-                samples.push_back((double) (t1 - t0) / (double) rows);
+                samples[ii][ki].push_back((double) (t1 - t0) / (double) rows);
             }
+        }
+    }
 
-            results[ii][ki] = summarize(samples);
+    std::vector<std::vector<stats>> results(impls.size());
+    for (size_t ii = 0; ii < impls.size(); ++ii) {
+        results[ii].resize(ks.size());
+        for (size_t ki = 0; ki < ks.size(); ++ki) {
+            results[ii][ki] = summarize(samples[ii][ki]);
         }
     }
 
@@ -247,12 +259,22 @@ int main(int argc, char ** argv) {
     }
 
     if (impls.size() == 2 && !csv) {
-        printf("\nspeedup (ref median / candidate median):\n");
+        printf("\nspeedup (ref / candidate), paired per repetition:\n");
         for (size_t ki = 0; ki < ks.size(); ++ki) {
             const double r = results[0][ki].median;
             const double c = results[1][ki].median;
-            printf("  k=%-7" PRId64 " ref=%10.1f ns  candidate=%10.1f ns  speedup=%6.3fx\n",
-                   ks[ki], r, c, (c > 0.0) ? r / c : 0.0);
+            // per repetition ratios, so that clock drift between the two
+            // implementations cancels instead of biasing the result
+            std::vector<double> ratios;
+            const size_t n = samples[0][ki].size() < samples[1][ki].size() ? samples[0][ki].size() : samples[1][ki].size();
+            for (size_t i = 0; i < n; ++i) {
+                if (samples[1][ki][i] > 0.0) {
+                    ratios.push_back(samples[0][ki][i] / samples[1][ki][i]);
+                }
+            }
+            const stats rs = summarize(ratios);
+            printf("  k=%-7" PRId64 " ref=%10.1f ns  candidate=%10.1f ns  ratio(median)=%6.3fx  ratio(sd)=%5.3f\n",
+                   ks[ki], r, c, rs.median, rs.sd);
         }
     }
 

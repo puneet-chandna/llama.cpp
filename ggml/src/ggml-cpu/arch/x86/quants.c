@@ -501,9 +501,132 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 #endif
 }
 
-// placeholder implementation for Apple targets
-void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_q8_K_ref(x, y, k);
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+#if defined(__AVX2__)
+    block_q8_K * GGML_RESTRICT y = vy;
+
+    // Per lane state of the abs max scan: the lane maximum, and the first vector
+    // index that reached it. The index is needed because the reference keeps the
+    // first element of the block with |x| == amax, and that element decides the
+    // sign of iscale and so the sign of every stored byte.
+    for (int64_t i = 0; i < nb; ++i) {
+        const float * const xb = x + i*QK_K;
+        block_q8_K * const yb = &y[i];
+
+        const __m256  sign_bit = _mm256_set1_ps(-0.0f);
+        const __m256i one      = _mm256_set1_epi32(1);
+        __m256  amaxv  = _mm256_setzero_ps();
+        __m256i kbestv = _mm256_setzero_si256();
+        __m256i itv    = _mm256_setzero_si256();
+
+        for (int it = 0; it < QK_K/8; ++it) {
+            const __m256 v  = _mm256_loadu_ps(xb + 8*it);
+            const __m256 ax = _mm256_andnot_ps(sign_bit, v);
+            // ordered compare, so a NaN never updates a lane, as in the reference's "ax > amax"
+            const __m256 gt = _mm256_cmp_ps(ax, amaxv, _CMP_GT_OQ);
+            amaxv  = _mm256_blendv_ps(amaxv, ax, gt);
+            kbestv = _mm256_blendv_epi8(kbestv, itv, _mm256_castps_si256(gt));
+            itv    = _mm256_add_epi32(itv, one);
+        }
+
+        float   axlane[8];
+        int32_t kblane[8];
+        _mm256_storeu_ps(axlane, amaxv);
+        _mm256_storeu_si256((__m256i *) kblane, kbestv);
+
+        // Fold the lanes in order. Comparing (kbest, lane) is the same order as
+        // comparing the element index 8*kbest + lane, so the winner is the first
+        // element of the block that reaches amax.
+        float amax  = 0.0f;
+        int   bestk = INT32_MAX;
+        int   best  = -1;
+        for (int l = 0; l < 8; ++l) {
+            const float ax = axlane[l];
+            const int   kb = kblane[l];
+            if (ax > amax || (ax == amax && kb < bestk)) {
+                amax  = ax;
+                bestk = kb;
+                best  = kb*8 + l;
+            }
+        }
+
+        // All zero and all NaN blocks: the reference sets d = 0, zeroes qs and
+        // leaves bsums untouched.
+        if (best < 0) {
+            quantize_row_q8_K_ref(xb, yb, QK_K);
+            continue;
+        }
+
+        // xb[best] is the value the reference stores in max
+        const float xmax   = xb[best];
+        const float iscale = -127.f/xmax;
+        // Infinite and denormal maxima need the reference too: a denormal max
+        // overflows iscale to infinity, where the reference stores zeros.
+        if (!(isfinite(xmax) && isfinite(iscale))) {
+            quantize_row_q8_K_ref(xb, yb, QK_K);
+            continue;
+        }
+
+        const __m256  iscalev  = _mm256_set1_ps(iscale);
+        const __m256i max127   = _mm256_set1_epi32(127);
+        const __m256i ones_u8  = _mm256_set1_epi8(1);
+        const __m256i ones_i16 = _mm256_set1_epi16(1);
+        const __m256i unpack   = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+        const __m256i gather4  = _mm256_setr_epi32(0, 4, 1, 5, 0, 4, 1, 5);
+
+        for (int j = 0; j < QK_K/64; ++j) {
+            __m256i i0 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  0), iscalev));
+            __m256i i1 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  8), iscalev));
+            __m256i i2 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 16), iscalev));
+            __m256i i3 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 24), iscalev));
+            __m256i i4 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 32), iscalev));
+            __m256i i5 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 40), iscalev));
+            __m256i i6 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 48), iscalev));
+            __m256i i7 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 56), iscalev));
+
+            // cvtps2dq rounds to nearest even from MXCSR, which is what
+            // nearest_int() does, so no fixup is needed below the clamp
+            i0 = _mm256_min_epi32(i0, max127);
+            i1 = _mm256_min_epi32(i1, max127);
+            i2 = _mm256_min_epi32(i2, max127);
+            i3 = _mm256_min_epi32(i3, max127);
+            i4 = _mm256_min_epi32(i4, max127);
+            i5 = _mm256_min_epi32(i5, max127);
+            i6 = _mm256_min_epi32(i6, max127);
+            i7 = _mm256_min_epi32(i7, max127);
+
+            // the pack instructions work per 128 bit lane, so the four 8 byte
+            // groups of each result are in the order 0,2,1,3 and need unpack
+            const __m256i q0 = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(_mm256_packs_epi32(i0, i1),
+                                                                              _mm256_packs_epi32(i2, i3)), unpack);
+            const __m256i q1 = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(_mm256_packs_epi32(i4, i5),
+                                                                              _mm256_packs_epi32(i6, i7)), unpack);
+            _mm256_storeu_si256((__m256i *) (yb->qs + 64*j +  0), q0);
+            _mm256_storeu_si256((__m256i *) (yb->qs + 64*j + 32), q1);
+
+            // bsums: maddubs sums byte pairs (the constant 1 is the unsigned
+            // operand, q the signed one), madd widens to sums of 4 bytes, and two
+            // hadd steps give sums of 16 bytes in int32 lanes 0 and 4
+            __m256i t0 = _mm256_maddubs_epi16(ones_u8, q0);
+            __m256i t1 = _mm256_maddubs_epi16(ones_u8, q1);
+            t0 = _mm256_madd_epi16(t0, ones_i16);
+            t1 = _mm256_madd_epi16(t1, ones_i16);
+            __m256i s = _mm256_hadd_epi32(t0, t1);
+            s = _mm256_hadd_epi32(s, s);
+            s = _mm256_permutevar8x32_epi32(s, gather4);
+            s = _mm256_packs_epi32(s, s);
+            _mm_storel_epi64((__m128i *) (yb->bsums + 4*j), _mm256_castsi256_si128(s));
+        }
+
+        yb->d = 1/iscale;
+    }
+#else
+    GGML_UNUSED(nb);
+    quantize_row_q8_K_ref(x, vy, k);
+#endif
 }
 
 //===================================== Dot products =================================
