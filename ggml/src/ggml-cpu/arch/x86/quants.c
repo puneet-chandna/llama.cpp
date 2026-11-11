@@ -508,48 +508,36 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 #if defined(__AVX2__)
     block_q8_K * GGML_RESTRICT y = vy;
 
-    // Per lane state of the abs max scan: the lane maximum, and the first vector
-    // index that reached it. The index is needed because the reference keeps the
-    // first element of the block with |x| == amax, and that element decides the
-    // sign of iscale and so the sign of every stored byte.
     for (int64_t i = 0; i < nb; ++i) {
         const float * const xb = x + i*QK_K;
         block_q8_K * const yb = &y[i];
 
-        const __m256  sign_bit = _mm256_set1_ps(-0.0f);
-        const __m256i one      = _mm256_set1_epi32(1);
-        __m256  amaxv  = _mm256_setzero_ps();
-        __m256i kbestv = _mm256_setzero_si256();
-        __m256i itv    = _mm256_setzero_si256();
+        const __m256 sign_bit = _mm256_set1_ps(-0.0f);
 
+        // The new value is the first operand and the running maximum the second
+        // one on purpose: VMAXPS returns its second operand when either input is
+        // NaN, so a NaN cannot replace the maximum, as in the reference's
+        // "ax > amax". All lanes stay finite.
+        __m256 amaxv = _mm256_setzero_ps();
         for (int it = 0; it < QK_K/8; ++it) {
-            const __m256 v  = _mm256_loadu_ps(xb + 8*it);
-            const __m256 ax = _mm256_andnot_ps(sign_bit, v);
-            // ordered compare, so a NaN never updates a lane, as in the reference's "ax > amax"
-            const __m256 gt = _mm256_cmp_ps(ax, amaxv, _CMP_GT_OQ);
-            amaxv  = _mm256_blendv_ps(amaxv, ax, gt);
-            kbestv = _mm256_blendv_epi8(kbestv, itv, _mm256_castps_si256(gt));
-            itv    = _mm256_add_epi32(itv, one);
+            const __m256 ax = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 8*it));
+            amaxv = _mm256_max_ps(ax, amaxv);
         }
+        __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(amaxv), _mm256_extractf128_ps(amaxv, 1));
+        m4 = _mm_max_ps(m4, _mm_movehl_ps(m4, m4));
+        m4 = _mm_max_ss(m4, _mm_movehdup_ps(m4));
+        const float amax = _mm_cvtss_f32(m4);
 
-        float   axlane[8];
-        int32_t kblane[8];
-        _mm256_storeu_ps(axlane, amaxv);
-        _mm256_storeu_si256((__m256i *) kblane, kbestv);
-
-        // Fold the lanes in order. Comparing (kbest, lane) is the same order as
-        // comparing the element index 8*kbest + lane, so the winner is the first
-        // element of the block that reaches amax.
-        float amax  = 0.0f;
-        int   bestk = INT32_MAX;
-        int   best  = -1;
-        for (int l = 0; l < 8; ++l) {
-            const float ax = axlane[l];
-            const int   kb = kblane[l];
-            if (ax > amax || (ax == amax && kb < bestk)) {
-                amax  = ax;
-                bestk = kb;
-                best  = kb*8 + l;
+        // Locate the first element of the block with |x| == amax. The reference
+        // keeps that one, and it decides the sign of iscale. NaN never matches,
+        // so an all NaN block ends with best < 0 and takes the reference path.
+        const __m256 amax_b = _mm256_set1_ps(amax);
+        int best = -1;
+        for (int it = 0; it < QK_K/8 && best < 0; ++it) {
+            const __m256 ax = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 8*it));
+            const unsigned int m = (unsigned int) _mm256_movemask_ps(_mm256_cmp_ps(ax, amax_b, _CMP_EQ_OQ));
+            if (m != 0) {
+                best = 8*it + __builtin_ctz(m);
             }
         }
 

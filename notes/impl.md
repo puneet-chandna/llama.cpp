@@ -117,6 +117,55 @@ when a block is all-zero, all-NaN, or has an infinite or denormal maximum.
 Roughly 440 uops per 256-element block, i.e. about 1.7 uops per element. Pass 1 is
 the larger half, which is what variant B attacks.
 
+## Variant B: reduction-first maximum plus an exact repair pass
+
+Replaces pass 1 and the lane fold with:
+
+- one `VMAXPS` chain over `|x|` (`VANDNPS` + `VMAXPS`), then two shuffles and
+  `_mm_max_ss` for the horizontal maximum - 5 uops per 8 elements instead of 8;
+- a **repair pass** that scans the 32 vectors again, computes
+  `movemask(cmp_eq(|x|, amax))` and takes `tzcnt` of the first non-zero mask, so
+  `best` is the first element of the block with `|x| == amax` - which is exactly
+  the reference's first argmax, hence the same `max` and the same `iscale` sign.
+
+Two exactness details that the sketch in the plan does not mention, both needed:
+
+1. **Operand order of `VMAXPS`.** The new value is the first operand and the
+   running maximum the second: `_mm256_max_ps(ax, amaxv)`. `VMAXPS` returns its
+   *second* operand when either input is NaN (verified on this machine:
+   `max(3.0, NaN) = NaN` but `max(NaN, 3.0) = 3.0`). With this order a NaN can
+   never replace the running maximum, so the chain reproduces the reference's
+   "NaN never satisfies `ax > amax`" rule with **zero** extra instructions. In the
+   other order, a NaN would *reset* the accumulator and the block maximum would
+   come out too small for any block that mixes NaN with finite values; the
+   `mixed_nonfinite` corpus is what would catch it.
+2. The maximum is therefore always finite in every lane, so the horizontal
+   reduction needs no NaN handling either, and an all-NaN block ends with
+   `amax = 0` and no match in the repair pass, which takes the reference path.
+
+Codegen (161 lines for the whole function, GCC 15.2.0, `-O2 -march=native`):
+
+```
+     360:	vandnps ymm2,ymm1,YMMWORD PTR [rax]   # |x|
+     36b:	vmaxps ymm0,ymm2,ymm0                  # new value first, NaN neutral
+     36f:	jne    360                             # pass 1 loop, 32 iterations
+     ...
+     395:	vandnps ymm2,ymm1,YMMWORD PTR [rsi]    # repair pass
+     399:	vcmpeqps ymm2,ymm2,ymm0
+     39e:	vmovmskps edx,ymm2
+     3a4:	je     438                            # no match in this vector
+     3aa:	tzcnt  edx,edx                         # first matching lane
+     ...
+     591:	jne    499                             # pass 2 loop, unchanged
+```
+
+| check | result |
+|---|---|
+| FMA / AVX-VNNI / F16C / AVX-512 opcodes | none |
+| `call` instructions in the body | 1 (the single degenerate-block call to `quantize_row_q8_K_ref`, reached only for all-zero, all-NaN, infinite or denormal maxima) |
+| stack references anywhere in the body | 2, both a spilled pointer outside all three loops; no `%ymm` spill in any loop |
+| `tzcnt` | present (BMI1, available on this CPU); without `-mbmi` GCC emits `bsf`, which is equivalent here because the mask is non-zero |
+
 ## Measurements
 
 `simd-bench` times the two implementations **alternately inside each repetition**
@@ -152,3 +201,24 @@ replaces.
 Correctness at this stage: `simd-diff --corpus all --blocks 5000` = 0 mismatches on
 all 15 corpora, `simd-diff --self-test` passes, `simd-bench --check` passes at every
 `k`. Full verification is phase 5.
+
+## Variant A vs variant B
+
+Two builds in one session, each measuring its own paired ratio against the
+reference (variant A from a `git worktree` at the phase 4a commit, variant B from
+the working tree), three rounds, 41 repetitions each:
+
+| k | variant A ratio vs ref | variant B ratio vs ref | B/A |
+|---|---|---|---|
+| 2048 | 4.546x, 4.508x, 4.545x | 6.291x, 6.648x, 6.343x | 1.38x, 1.47x, 1.40x |
+| 3072 | 4.539x, 4.473x, 4.546x | 6.038x, 6.325x, 5.973x | 1.33x, 1.41x, 1.31x |
+
+The reference times inside each round overlap between the two builds (4550-5772 ns
+versus 4720-5524 ns at k=2048), so the two builds saw comparable machine states,
+and the ratio is in any case measured paired within each process.
+
+Variant B wins by about 1.35-1.45x. That is consistent with variant A being
+latency-bound rather than throughput-bound: A carries a `VCMPPS` + `VBLENDVPS`
+chain of about 6 cycles through all 32 iterations of pass 1, while B's `VMAXPS`
+chain is 4 cycles per iteration and is the only chain, and its repair pass exits
+after the first matching vector (half a block on average).
