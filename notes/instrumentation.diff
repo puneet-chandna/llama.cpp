@@ -1,0 +1,31 @@
+diff --git a/ggml/src/ggml-cpu/arch/x86/quants.c b/ggml/src/ggml-cpu/arch/x86/quants.c
+index 21cd6312a..bb7357581 100644
+--- a/ggml/src/ggml-cpu/arch/x86/quants.c
++++ b/ggml/src/ggml-cpu/arch/x86/quants.c
+@@ -501,9 +501,26 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
+ #endif
+ }
+ 
++// TEMPORARY rdtsc instrumentation, never committed: measures how much wall time
++// the scalar q8_K quantizer consumes inside a real llama-bench run.
++static unsigned long long g_q8k_cycles = 0;
++static unsigned long long g_q8k_calls  = 0;
++static unsigned long long g_q8k_elems  = 0;
++
++__attribute__((destructor))
++static void q8k_instr_report(void) {
++    fprintf(stderr, "Q8K_INSTR cycles=%llu calls=%llu elems=%llu\n",
++            g_q8k_cycles, g_q8k_calls, g_q8k_elems);
++}
++
+ // placeholder implementation for Apple targets
+ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
++    const unsigned long long t0 = __builtin_ia32_rdtsc();
+     quantize_row_q8_K_ref(x, y, k);
++    const unsigned long long t1 = __builtin_ia32_rdtsc();
++    __atomic_fetch_add(&g_q8k_cycles, t1 - t0,                 __ATOMIC_RELAXED);
++    __atomic_fetch_add(&g_q8k_calls,  1,                       __ATOMIC_RELAXED);
++    __atomic_fetch_add(&g_q8k_elems,  (unsigned long long) k,  __ATOMIC_RELAXED);
+ }
+ 
+ //===================================== Dot products =================================

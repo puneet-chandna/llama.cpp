@@ -1,0 +1,272 @@
+################################################################
+# label:    before-pristine
+# date:     2026-11-12T02:25:29+05:30
+# bin:      /home/puneet/llama-pristine/build/release/bin
+# git:      5fac66808, 7 modified files
+# measured: sha256(/home/puneet/llama-pristine/build/release/bin/libggml-cpu.so) = 17e8c6a9d07633d30182c3a1f76339e7
+# cpu:      12th Gen Intel(R) Core(TM) i5-1235U
+# governor: powersave
+# mem avail: 9236 MB
+# config:   taskset -c 0,2, -t 2
+################################################################
+
+=== llama-bench 1B default (mem avail 9233 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -p 512 -n 128 -t 2 -r 5  -o md
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       2 |           pp512 |         71.28 ± 3.89 |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       2 |           tg128 |         17.50 ± 0.93 |
+
+build: 5fac66808 (12283)
+
+=== llama-bench 1B norepack (mem avail 9233 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -p 512 -n 128 -t 2 -r 5 -nr -o md
+error: invalid parameter for argument: -nr
+usage: /home/puneet/llama-pristine/build/release/bin/llama-bench [options]
+
+options:
+  -h, --help
+  --version                                   show version and build info
+  --numa <distribute|isolate|numactl>         numa mode (default: disabled)
+  -r, --repetitions <n>                       number of times to repeat each test (default: 5)
+  --prio <-1|0|1|2|3>                         process/thread priority (default: 0)
+  --delay <0...N> (seconds)                   delay between each test (default: 0)
+  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: md)
+  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: none)
+  --list-devices                              list available devices and exit
+  -v, --verbose                               verbose output
+  --progress                                  print test progress indicators
+  --no-warmup                                 skip warmup runs before benchmarking
+  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)
+  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)
+
+test parameters:
+  -m, --model <filename>                            (default: models/7B/ggml-model-q4_0.gguf)
+  -hf, -hfr, --hf-repo <user>/<model>[:quant]       Hugging Face model repository; quant is optional, case-insensitive
+                                                    default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.
+                                                    example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M
+                                                    (default: unused)
+  -hff, --hf-file <file>                            Hugging Face model file. If specified, it will override the quant in --hf-repo
+                                                    (default: unused)
+  -hft, --hf-token <token>                          Hugging Face access token
+                                                    (default: value from HF_TOKEN environment variable)
+  --offline                                         Offline mode: forces use of cache, prevents network access
+                                                    (default: disabled)
+  -p, --n-prompt <n>                                (default: 512)
+  -n, --n-gen <n>                                   (default: 128)
+  -pg <pp,tg>                                       (default: )
+  -d, --n-depth <n>                                 (default: 0)
+  -b, --batch-size <n>                              (default: 2048)
+  -ub, --ubatch-size <n>                            (default: 512)
+  -ctk, --cache-type-k <t>                          (default: f16)
+  -ctv, --cache-type-v <t>                          (default: f16)
+  -t, --threads <n>                                 (default: 2)
+  -C, --cpu-mask <hex,hex>                          (default: 0x0)
+  --cpu-strict <0|1>                                (default: 0)
+  --poll <0...100>                                  (default: 50)
+  -ngl, --n-gpu-layers <n>                          (default: -1)
+  -ncmoe, --n-cpu-moe <n>                           (default: 0)
+  -sm, --split-mode <none|layer|row|tensor>         (default: layer)
+  -mg, --main-gpu <i>                               (default: 0)
+  -nkvo, --no-kv-offload <0|1>                      (default: 0)
+  -fa, --flash-attn <on|off|auto>                   (default: auto)
+  -dev, --device <dev0/dev1/...>                    (default: auto)
+  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: auto)
+  -lzm, --lazy-mode <on|auto|off>                   (default: auto)
+  -embd, --embeddings <0|1>                         (default: 0)
+  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)
+  -ot --override-tensor <tensor name pattern>=<buffer type>;...
+                                                    (default: disabled)
+  -nopo, --no-op-offload <0|1>                      (default: 0)
+  --no-host <0|1>                                   (default: 0)
+  --repack <0|1>                                    (default: 1)
+
+Multiple values can be given for each parameter by separating them with ','
+or by specifying the parameter multiple times. Ranges can be given as
+'first-last' or 'first-last+step' or 'first-last*mult'.
+llama-bench FAILED with status 1
+
+=== llama-perplexity 1B (chunks 16, 5 reps) ===
+rep 1 chunks: [1]7.3368 [2]9.9290 [3]11.3992 [4]12.1204 [5]12.7165 [6]13.1160 [7]13.7799 [8]14.7408 [9]16.1815 [10]16.4910 [11]16.7302 [12]17.1047 [13]18.1087 [14]17.1847 [15]16.9441 [16]16.4452 
+rep 1 final:  Final estimate: PPL = 16.4452 +/- 0.74551
+rep 2 chunks: [1]7.3368 [2]9.9290 [3]11.3992 [4]12.1204 [5]12.7165 [6]13.1160 [7]13.7799 [8]14.7408 [9]16.1815 [10]16.4910 [11]16.7302 [12]17.1047 [13]18.1087 [14]17.1847 [15]16.9441 [16]16.4452 
+rep 2 final:  Final estimate: PPL = 16.4452 +/- 0.74551
+rep 3 chunks: [1]7.3368 [2]9.9290 [3]11.3992 [4]12.1204 [5]12.7165 [6]13.1160 [7]13.7799 [8]14.7408 [9]16.1815 [10]16.4910 [11]16.7302 [12]17.1047 [13]18.1087 [14]17.1847 [15]16.9441 [16]16.4452 
+rep 3 final:  Final estimate: PPL = 16.4452 +/- 0.74551
+rep 4 chunks: [1]7.3368 [2]9.9290 [3]11.3992 [4]12.1204 [5]12.7165 [6]13.1160 [7]13.7799 [8]14.7408 [9]16.1815 [10]16.4910 [11]16.7302 [12]17.1047 [13]18.1087 [14]17.1847 [15]16.9441 [16]16.4452 
+rep 4 final:  Final estimate: PPL = 16.4452 +/- 0.74551
+rep 5 chunks: [1]7.3368 [2]9.9290 [3]11.3992 [4]12.1204 [5]12.7165 [6]13.1160 [7]13.7799 [8]14.7408 [9]16.1815 [10]16.4910 [11]16.7302 [12]17.1047 [13]18.1087 [14]17.1847 [15]16.9441 [16]16.4452 
+rep 5 final:  Final estimate: PPL = 16.4452 +/- 0.74551
+
+=== llama-bench 3B default (mem avail 8530 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-3B-Instruct-IQ4_XS.gguf -p 512 -n 128 -t 2 -r 5  -o md
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 3B IQ4_XS - 4.25 bpw     |   1.70 GiB |     3.21 B | CPU        |       2 |           pp512 |         25.39 ± 0.74 |
+| llama 3B IQ4_XS - 4.25 bpw     |   1.70 GiB |     3.21 B | CPU        |       2 |           tg128 |          7.30 ± 0.21 |
+
+build: 5fac66808 (12283)
+
+=== llama-bench 3B norepack (mem avail 8530 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-3B-Instruct-IQ4_XS.gguf -p 512 -n 128 -t 2 -r 5 -nr -o md
+error: invalid parameter for argument: -nr
+usage: /home/puneet/llama-pristine/build/release/bin/llama-bench [options]
+
+options:
+  -h, --help
+  --version                                   show version and build info
+  --numa <distribute|isolate|numactl>         numa mode (default: disabled)
+  -r, --repetitions <n>                       number of times to repeat each test (default: 5)
+  --prio <-1|0|1|2|3>                         process/thread priority (default: 0)
+  --delay <0...N> (seconds)                   delay between each test (default: 0)
+  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: md)
+  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: none)
+  --list-devices                              list available devices and exit
+  -v, --verbose                               verbose output
+  --progress                                  print test progress indicators
+  --no-warmup                                 skip warmup runs before benchmarking
+  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)
+  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)
+
+test parameters:
+  -m, --model <filename>                            (default: models/7B/ggml-model-q4_0.gguf)
+  -hf, -hfr, --hf-repo <user>/<model>[:quant]       Hugging Face model repository; quant is optional, case-insensitive
+                                                    default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.
+                                                    example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M
+                                                    (default: unused)
+  -hff, --hf-file <file>                            Hugging Face model file. If specified, it will override the quant in --hf-repo
+                                                    (default: unused)
+  -hft, --hf-token <token>                          Hugging Face access token
+                                                    (default: value from HF_TOKEN environment variable)
+  --offline                                         Offline mode: forces use of cache, prevents network access
+                                                    (default: disabled)
+  -p, --n-prompt <n>                                (default: 512)
+  -n, --n-gen <n>                                   (default: 128)
+  -pg <pp,tg>                                       (default: )
+  -d, --n-depth <n>                                 (default: 0)
+  -b, --batch-size <n>                              (default: 2048)
+  -ub, --ubatch-size <n>                            (default: 512)
+  -ctk, --cache-type-k <t>                          (default: f16)
+  -ctv, --cache-type-v <t>                          (default: f16)
+  -t, --threads <n>                                 (default: 2)
+  -C, --cpu-mask <hex,hex>                          (default: 0x0)
+  --cpu-strict <0|1>                                (default: 0)
+  --poll <0...100>                                  (default: 50)
+  -ngl, --n-gpu-layers <n>                          (default: -1)
+  -ncmoe, --n-cpu-moe <n>                           (default: 0)
+  -sm, --split-mode <none|layer|row|tensor>         (default: layer)
+  -mg, --main-gpu <i>                               (default: 0)
+  -nkvo, --no-kv-offload <0|1>                      (default: 0)
+  -fa, --flash-attn <on|off|auto>                   (default: auto)
+  -dev, --device <dev0/dev1/...>                    (default: auto)
+  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: auto)
+  -lzm, --lazy-mode <on|auto|off>                   (default: auto)
+  -embd, --embeddings <0|1>                         (default: 0)
+  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)
+  -ot --override-tensor <tensor name pattern>=<buffer type>;...
+                                                    (default: disabled)
+  -nopo, --no-op-offload <0|1>                      (default: 0)
+  --no-host <0|1>                                   (default: 0)
+  --repack <0|1>                                    (default: 1)
+
+Multiple values can be given for each parameter by separating them with ','
+or by specifying the parameter multiple times. Ranges can be given as
+'first-last' or 'first-last+step' or 'first-last*mult'.
+llama-bench FAILED with status 1
+
+=== llama-perplexity 3B (chunks 16, 5 reps) ===
+rep 1 chunks: [1]5.3441 [2]7.2145 [3]8.5267 [4]9.0133 [5]9.6373 [6]10.0531 [7]10.5452 [8]11.3260 [9]12.3455 [10]12.5876 [11]12.7464 [12]13.0697 [13]13.7054 [14]12.9695 [15]12.8348 [16]12.4257 
+rep 1 final:  Final estimate: PPL = 12.4257 +/- 0.54566
+rep 2 chunks: [1]5.3441 [2]7.2145 [3]8.5267 [4]9.0133 [5]9.6373 [6]10.0531 [7]10.5452 [8]11.3260 [9]12.3455 [10]12.5876 [11]12.7464 [12]13.0697 [13]13.7054 [14]12.9695 [15]12.8348 [16]12.4257 
+rep 2 final:  Final estimate: PPL = 12.4257 +/- 0.54566
+rep 3 chunks: [1]5.3441 [2]7.2145 [3]8.5267 [4]9.0133 [5]9.6373 [6]10.0531 [7]10.5452 [8]11.3260 [9]12.3455 [10]12.5876 [11]12.7464 [12]13.0697 [13]13.7054 [14]12.9695 [15]12.8348 [16]12.4257 
+rep 3 final:  Final estimate: PPL = 12.4257 +/- 0.54566
+rep 4 chunks: [1]5.3441 [2]7.2145 [3]8.5267 [4]9.0133 [5]9.6373 [6]10.0531 [7]10.5452 [8]11.3260 [9]12.3455 [10]12.5876 [11]12.7464 [12]13.0697 [13]13.7054 [14]12.9695 [15]12.8348 [16]12.4257 
+rep 4 final:  Final estimate: PPL = 12.4257 +/- 0.54566
+rep 5 chunks: [1]5.3441 [2]7.2145 [3]8.5267 [4]9.0133 [5]9.6373 [6]10.0531 [7]10.5452 [8]11.3260 [9]12.3455 [10]12.5876 [11]12.7464 [12]13.0697 [13]13.7054 [14]12.9695 [15]12.8348 [16]12.4257 
+rep 5 final:  Final estimate: PPL = 12.4257 +/- 0.54566
+
+=== llama-bench 7B default (mem avail 9132 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Qwen2.5-7B-Instruct-Q4_K_M.gguf -p 256 -n 64 -t 2 -r 3  -o md
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CPU        |       2 |           pp256 |         12.20 ± 0.50 |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CPU        |       2 |            tg64 |          3.87 ± 0.23 |
+
+build: 5fac66808 (12283)
+
+=== llama-bench 7B norepack (mem avail 9132 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Qwen2.5-7B-Instruct-Q4_K_M.gguf -p 256 -n 64 -t 2 -r 3 -nr -o md
+error: invalid parameter for argument: -nr
+usage: /home/puneet/llama-pristine/build/release/bin/llama-bench [options]
+
+options:
+  -h, --help
+  --version                                   show version and build info
+  --numa <distribute|isolate|numactl>         numa mode (default: disabled)
+  -r, --repetitions <n>                       number of times to repeat each test (default: 5)
+  --prio <-1|0|1|2|3>                         process/thread priority (default: 0)
+  --delay <0...N> (seconds)                   delay between each test (default: 0)
+  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: md)
+  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: none)
+  --list-devices                              list available devices and exit
+  -v, --verbose                               verbose output
+  --progress                                  print test progress indicators
+  --no-warmup                                 skip warmup runs before benchmarking
+  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)
+  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)
+
+test parameters:
+  -m, --model <filename>                            (default: models/7B/ggml-model-q4_0.gguf)
+  -hf, -hfr, --hf-repo <user>/<model>[:quant]       Hugging Face model repository; quant is optional, case-insensitive
+                                                    default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.
+                                                    example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M
+                                                    (default: unused)
+  -hff, --hf-file <file>                            Hugging Face model file. If specified, it will override the quant in --hf-repo
+                                                    (default: unused)
+  -hft, --hf-token <token>                          Hugging Face access token
+                                                    (default: value from HF_TOKEN environment variable)
+  --offline                                         Offline mode: forces use of cache, prevents network access
+                                                    (default: disabled)
+  -p, --n-prompt <n>                                (default: 512)
+  -n, --n-gen <n>                                   (default: 128)
+  -pg <pp,tg>                                       (default: )
+  -d, --n-depth <n>                                 (default: 0)
+  -b, --batch-size <n>                              (default: 2048)
+  -ub, --ubatch-size <n>                            (default: 512)
+  -ctk, --cache-type-k <t>                          (default: f16)
+  -ctv, --cache-type-v <t>                          (default: f16)
+  -t, --threads <n>                                 (default: 2)
+  -C, --cpu-mask <hex,hex>                          (default: 0x0)
+  --cpu-strict <0|1>                                (default: 0)
+  --poll <0...100>                                  (default: 50)
+  -ngl, --n-gpu-layers <n>                          (default: -1)
+  -ncmoe, --n-cpu-moe <n>                           (default: 0)
+  -sm, --split-mode <none|layer|row|tensor>         (default: layer)
+  -mg, --main-gpu <i>                               (default: 0)
+  -nkvo, --no-kv-offload <0|1>                      (default: 0)
+  -fa, --flash-attn <on|off|auto>                   (default: auto)
+  -dev, --device <dev0/dev1/...>                    (default: auto)
+  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: auto)
+  -lzm, --lazy-mode <on|auto|off>                   (default: auto)
+  -embd, --embeddings <0|1>                         (default: 0)
+  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)
+  -ot --override-tensor <tensor name pattern>=<buffer type>;...
+                                                    (default: disabled)
+  -nopo, --no-op-offload <0|1>                      (default: 0)
+  --no-host <0|1>                                   (default: 0)
+  --repack <0|1>                                    (default: 1)
+
+Multiple values can be given for each parameter by separating them with ','
+or by specifying the parameter multiple times. Ranges can be given as
+'first-last' or 'first-last+step' or 'first-last*mult'.
+llama-bench FAILED with status 1
+
+=== llama-perplexity 7B (chunks 8, 3 reps) ===
+rep 1 chunks: [1]5.7112 [2]7.6374 [3]6.8894 [4]6.5506 [5]6.4980 [6]6.5423 [7]6.5686 [8]6.7962 
+rep 1 final:  Final estimate: PPL = 6.7962 +/- 0.39313
+rep 2 chunks: [1]5.7112 [2]7.6374 [3]6.8894 [4]6.5506 [5]6.4980 [6]6.5423 [7]6.5686 [8]6.7962 
+rep 2 final:  Final estimate: PPL = 6.7962 +/- 0.39313
+
+=== llama-perplexity 7B rep 3 (appended: the first run was cut off by the 3600s tool cap) ===
+Final estimate: PPL = 6.7962 +/- 0.39313

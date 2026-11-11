@@ -1,0 +1,39 @@
+################################################################
+# label:    before-pristine (repack disabled)
+# date:     2026-11-12T03:33:45+05:30
+# bin:      /home/puneet/llama-pristine/build/release/bin
+# measured: sha256(/home/puneet/llama-pristine/build/release/bin/libggml-cpu.so) = 17e8c6a9d07633d30182c3a1f76339e7
+# governor: powersave
+# mem avail: 11472 MB
+# config:   taskset -c 0,2, -t 2, --repack 0
+################################################################
+
+=== llama-bench 1B norepack (mem avail 11472 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -p 512 -n 128 -t 2 -r 5 --repack 0 -o md
+| model                          |       size |     params | backend    | threads | rpk |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --: | --------------: | -------------------: |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       2 |   0 |           pp512 |         83.05 ± 3.51 |
+| llama 1B Q4_K - Medium         | 762.81 MiB |     1.24 B | CPU        |       2 |   0 |           tg128 |         23.68 ± 0.84 |
+
+build: 5fac66808 (12283)
+
+=== llama-bench 3B norepack (mem avail 11390 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Llama-3.2-3B-Instruct-IQ4_XS.gguf -p 512 -n 128 -t 2 -r 5 --repack 0 -o md
+| model                          |       size |     params | backend    | threads | rpk |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --: | --------------: | -------------------: |
+| llama 3B IQ4_XS - 4.25 bpw     |   1.70 GiB |     3.21 B | CPU        |       2 |   0 |           pp512 |         26.85 ± 0.28 |
+| llama 3B IQ4_XS - 4.25 bpw     |   1.70 GiB |     3.21 B | CPU        |       2 |   0 |           tg128 |          7.65 ± 0.44 |
+
+build: 5fac66808 (12283)
+
+=== llama-bench 7B norepack (mem avail 11270 MB) ===
+# taskset -c 0,2 /home/puneet/llama-pristine/build/release/bin/llama-bench -m models/Qwen2.5-7B-Instruct-Q4_K_M.gguf -p 256 -n 64 -t 2 -r 3 --repack 0 -o md
+| model                          |       size |     params | backend    | threads | rpk |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --: | --------------: | -------------------: |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CPU        |       2 |   0 |           pp256 |         12.99 ± 0.66 |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CPU        |       2 |   0 |            tg64 |          4.36 ± 0.06 |
+
+build: 5fac66808 (12283)
+
+=== mem avail at end: 11239 MB ===
+=== done ===

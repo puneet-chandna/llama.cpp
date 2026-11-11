@@ -39,6 +39,7 @@ else()
         # these tools use backends directly (no dynamic loading) and depend on CPU backend symbols
         add_subdirectory(cvector-generator)
         add_subdirectory(export-lora)
+        add_subdirectory(simd-experiment)
     endif()
     add_subdirectory(fit-params)
     if (GGML_METAL)

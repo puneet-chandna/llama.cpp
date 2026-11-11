@@ -251,7 +251,7 @@ So the divergence is the argmax tie rule, the out-of-range clamp convention (sat
 | `_mm256_cvtps_epi32` | `VCVTPS2DQ` | round according to MXCSR (default round-to-nearest-**even**), which is what makes it equal to `nearest_int` for the reachable range |
 | `_mm256_min_epi32` | `VPMINSD` | the `MIN(127, v)` clamp |
 | `_mm256_packs_epi32` + `_mm256_packs_epi16` | `VPACKSSDW` + `VPACKSSWB` | int32 -> int16 -> int8; saturation is unreachable because `v` is already clamped to `<= 127` and bounded below by `>= -127` (see 3.8) |
-| `_mm256_permute4x64_epi64(..., 0xD8)` | `VPERMQ` | fix the `VPACKSSWB` 128-bit lane interleave; 0xD8 = qword order (0,2,1,3), identical to the `permutevar8x32_epi32(0,4,1,5,2,6,3,7)` used by `quantize_row_q8_0` |
+| `_mm256_permutevar8x32_epi32(..., {0,4,1,5,2,6,3,7})` | `VPERMD` | fix the `VPACKSSWB` 128-bit lane interleave; the same index vector `quantize_row_q8_0` uses. A qword level permute (`VPERMQ`) is **not** equivalent, see 3.7 |
 | `_mm256_maddubs_epi16` | `VPMADDUBSW` | pair sums for `bsums`: **first operand must be the unsigned constant `1`**, second operand the signed `q`, so each int16 is `q[2i] + q[2i+1]` |
 | `_mm256_madd_epi16` | `VPMADDWD` | widen pair sums to int32, giving sums of 4 consecutive bytes |
 | `_mm256_hadd_epi32` | `VPHADDD` | two steps: 4-byte sums -> 8-byte sums -> 16-byte sums |
@@ -311,12 +311,23 @@ packed  = permute4x64_epi64(packs_epi16(a, b), 0xD8)
 storeu_si256(y[i].qs + 32*j, packed)
 ```
 
-Lane derivation for the pack+permute chain (32 elements, `viN` holds elements `8N..8N+7`):
+Lane derivation for the pack+permute chain (32 elements, `viN` holds elements `8N..8N+7`,
+`a = packs_epi32(vi0,vi1)`, `b = packs_epi32(vi2,vi3)`), at `dword` granularity because the
+pack instructions interleave at 8-byte granularity, not at qword granularity:
 
-| after | qword0 | qword1 | qword2 | qword3 |
-|---|---|---|---|---|
-| `packs_epi16(a,b)` | elems 0-3, 8-11 | elems 16-19, 24-27 | elems 4-7, 12-15 | elems 20-23, 28-31 |
-| after `permute4x64(0xD8)` = (0,2,1,3) | elems 0-7 | elems 8-15 | elems 16-23 | elems 24-31 |
+| after | d0 | d1 | d2 | d3 | d4 | d5 | d6 | d7 |
+|---|---|---|---|---|---|---|---|---|
+| `packs_epi16(a,b)` | e0-3 | e8-11 | e16-19 | e24-27 | e4-7 | e12-15 | e20-23 | e28-31 |
+| after `permutevar8x32_epi32(..., {0,4,1,5,2,6,3,7})` | e0-3 | e4-7 | e8-11 | e12-15 | e16-19 | e20-23 | e24-27 | e28-31 |
+
+**This was wrong in the first implementation.** It used `_mm256_permute4x64_epi64(..., 0xD8)`,
+i.e. the qword order (0,2,1,3), on the assumption that it is equivalent to the dword index
+vector above. It is not: a qword level swap moves the pairs `(e0-3,e8-11)` and `(e4-7,e12-15)`
+around without ever merging them, so elements 4..7 were stored with the values of elements
+8..11. The `simd-diff` tie corpus caught it on the first run (first mismatch: `qs[4]`
+expected -125, got -127, on a block whose maximum is +36 at index 0 and 35.5 at index 4,
+i.e. an element shifted by exactly one 8-byte group), and the fix is the dword index vector
+already used by `quantize_row_q8_0`.
 
 `bsums` for 64 elements per iteration (this is where the plan's "one 32-byte store" is refined into a verified 4-store form):
 
@@ -369,3 +380,45 @@ No repo code appears to depend on the untouched-`bsums` behaviour, so this is re
 ### 4.4 Upstream overlap
 
 PR 22331 changes this same function on x86 (state `open`, created 2026-04-24). This experiment is a private fork experiment on branch `ai/simd-experiment`; nothing here is proposed upstream.
+
+### 4.5 The plan's tolerance-rule premise is false: the AVX2 `quantize_row_q8_0` is not bit-exact
+
+The plan justified the zero-tolerance rule for `q8_K` partly with "the existing x86 SIMD quantizers are bit-exact against their refs (measured in the step above)". That was measured and is **false**:
+
+```
+$ build/release/bin/simd-diff --q8-0-baseline --blocks 20000     # quantize_row_q8_0 (AVX2) vs quantize_row_q8_0_ref
+q8_0_baseline corpus=uniform         calls=2500      blocks=20000       mismatches=2
+q8_0_baseline corpus=wide            calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=denormal        calls=2500      blocks=20000       mismatches=2500
+q8_0_baseline corpus=tie             calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=spike           calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=zero            calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=allzero         calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=extreme         calls=2500      blocks=20000       mismatches=0
+q8_0_baseline corpus=inf             calls=2500      blocks=20000       mismatches=2500
+q8_0_baseline corpus=nan             calls=2500      blocks=20000       mismatches=2500
+q8_0_baseline corpus=mixed_nonfinite calls=2500      blocks=20000       mismatches=2500
+q8_0_baseline corpus=clamp_edge      calls=2500      blocks=20000       mismatches=2500
+q8_0_baseline corpus=unaligned       calls=2500      blocks=20000       mismatches=2
+q8_0_baseline corpus=odd_k           calls=2500      blocks=20000       mismatches=1020
+q8_0_baseline corpus=random_mix      calls=2500      blocks=20000       mismatches=986
+total mismatches: 14510
+```
+
+(`odd_k` and `random_mix` draw from the mixed generators, so they inherit the causes below; `extreme`, `wide`, `tie`, `spike`, `zero` and `allzero` happen to avoid them because their values are all exactly representable so the two reciprocal computations agree, and their maxima are neither half-integers nor degenerate.)
+
+Three independent causes, all visible by reading both implementations:
+
+1. **Rounding rule.** `quantize_row_q8_0_ref` (`ggml/src/ggml-quants.c`) ends with `y[i].qs[j] = roundf(x0);` - `roundf` rounds halves **away from zero**. The AVX2 path (`arch/x86/quants.c:302`) uses `_mm256_round_ps(..., _MM_ROUND_NEAREST)` followed by `cvtps_epi32`, i.e. halves to **even**. Every corpus that contains exact half-integer products (`clamp_edge` is built for exactly that) mismatches on 100% of blocks.
+2. **Reciprocal round trip.** The reference computes `d = amax/127` then `id = 1.0f/d` (two roundings); the AVX2 path computes `id = 127.f/maxScalar` (one rounding). For non-power-of-two `amax` the two `id` values differ in the last bit, which occasionally flips a rounding decision - this is what produces the 2 mismatches in 20000 `uniform` blocks.
+3. **Degenerate inputs.** The reference guards with `d ? 1.0f/d : 0.0f`, so a denormal `amax` (where `amax/127` underflows to zero) produces `d = 0` and all-zero quants. The AVX2 path computes `127/maxScalar`, which overflows to infinity, and `cvtps_epi32(inf)` becomes the `INT_MIN` sentinel, which the saturating pack turns into `-128`. Same pattern for NaN and infinity, and the `MAX` macro vs `_mm256_max_ps` differ on NaN propagation.
+
+Consequences for this experiment:
+
+- The zero-tolerance rule for `q8_K` stands, but its justification is **analytical**, not empirical: the `q8_K` reference uses `nearest_int` = round-half-to-even, which `VCVTPS2DQ` reproduces exactly, and `d` is produced from the same `-127.f/max` and `1/iscale` scalar expressions. Bit-exactness is therefore achievable and is required by the approved plan; it is *verified* by measurement (`simd-diff`) rather than inherited from `q8_0`.
+- It is also the reason the `q8_K` kernel must **delegate** degenerate blocks to the reference rather than "fixing" them: case 3 above is exactly the trap the `isfinite(iscale)` guard avoids. Had the guard been the plan's `amax >= FLT_MIN`, a block of `1.0e-37f` would have hit it.
+- The `q8_0` divergence is reported as an observation, not as a bug: the practical impact is at most one quantization step on exact-half inputs and a different (but still finite) result on degenerate inputs that do not occur in real activations. It is not a memory-safety issue and it is out of scope for this experiment.
+
+### 4.6 `block_q8_K.d` is a 32-bit float, not an fp16
+
+The plan describes `d` as "one fp16 produced by a scalar expression" and the differential tester as comparing "`d` as raw uint16". `block_q8_K` is `{ float d; int8_t qs[QK_K]; int16_t bsums[QK_K/16]; }` (`ggml/src/ggml-common.h:371-375`, with a `static_assert` on the size), so `d` is a full 32-bit float and is compared as raw **uint32**. There is no fp16 rounding step anywhere in this path, which removes a whole class of potential mismatch at the top of the range. `simd-diff` compares the whole 292-byte block, so the width is handled implicitly and exactly.
