@@ -514,15 +514,29 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
         const __m256 sign_bit = _mm256_set1_ps(-0.0f);
 
+        // Four independent chains, then one merge: a single chain would carry the
+        // 4 cycle VMAXPS latency through all 32 vectors, which is longer than the
+        // rest of the block costs together.
+        //
         // The new value is the first operand and the running maximum the second
         // one on purpose: VMAXPS returns its second operand when either input is
         // NaN, so a NaN cannot replace the maximum, as in the reference's
         // "ax > amax". All lanes stay finite.
-        __m256 amaxv = _mm256_setzero_ps();
-        for (int it = 0; it < QK_K/8; ++it) {
-            const __m256 ax = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 8*it));
-            amaxv = _mm256_max_ps(ax, amaxv);
+        __m256 amax0 = _mm256_setzero_ps();
+        __m256 amax1 = _mm256_setzero_ps();
+        __m256 amax2 = _mm256_setzero_ps();
+        __m256 amax3 = _mm256_setzero_ps();
+        for (int it = 0; it < QK_K/32; ++it) {
+            const __m256 a0 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  0));
+            const __m256 a1 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  8));
+            const __m256 a2 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 16));
+            const __m256 a3 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 24));
+            amax0 = _mm256_max_ps(a0, amax0);
+            amax1 = _mm256_max_ps(a1, amax1);
+            amax2 = _mm256_max_ps(a2, amax2);
+            amax3 = _mm256_max_ps(a3, amax3);
         }
+        const __m256 amaxv = _mm256_max_ps(_mm256_max_ps(amax0, amax1), _mm256_max_ps(amax2, amax3));
         __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(amaxv), _mm256_extractf128_ps(amaxv, 1));
         m4 = _mm_max_ps(m4, _mm_movehl_ps(m4, m4));
         m4 = _mm_max_ss(m4, _mm_movehdup_ps(m4));
@@ -559,32 +573,26 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         }
 
         const __m256  iscalev  = _mm256_set1_ps(iscale);
-        const __m256i max127   = _mm256_set1_epi32(127);
         const __m256i ones_u8  = _mm256_set1_epi8(1);
         const __m256i ones_i16 = _mm256_set1_epi16(1);
         const __m256i unpack   = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
         const __m256i gather4  = _mm256_setr_epi32(0, 4, 1, 5, 0, 4, 1, 5);
 
         for (int j = 0; j < QK_K/64; ++j) {
-            __m256i i0 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  0), iscalev));
-            __m256i i1 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  8), iscalev));
-            __m256i i2 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 16), iscalev));
-            __m256i i3 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 24), iscalev));
-            __m256i i4 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 32), iscalev));
-            __m256i i5 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 40), iscalev));
-            __m256i i6 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 48), iscalev));
-            __m256i i7 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 56), iscalev));
+            const __m256i i0 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  0), iscalev));
+            const __m256i i1 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j +  8), iscalev));
+            const __m256i i2 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 16), iscalev));
+            const __m256i i3 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 24), iscalev));
+            const __m256i i4 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 32), iscalev));
+            const __m256i i5 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 40), iscalev));
+            const __m256i i6 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 48), iscalev));
+            const __m256i i7 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_loadu_ps(xb + 64*j + 56), iscalev));
 
             // cvtps2dq rounds to nearest even from MXCSR, which is what
-            // nearest_int() does, so no fixup is needed below the clamp
-            i0 = _mm256_min_epi32(i0, max127);
-            i1 = _mm256_min_epi32(i1, max127);
-            i2 = _mm256_min_epi32(i2, max127);
-            i3 = _mm256_min_epi32(i3, max127);
-            i4 = _mm256_min_epi32(i4, max127);
-            i5 = _mm256_min_epi32(i5, max127);
-            i6 = _mm256_min_epi32(i6, max127);
-            i7 = _mm256_min_epi32(i7, max127);
+            // nearest_int() does. The reference's MIN(127, v) needs no separate
+            // step: |iscale*x| <= 127 * (1 + 2^-23) because |x| <= |max|, so the
+            // value is already in range, and VPACKSSDW/VPACKSSWB saturate to 127
+            // in exactly the same place MIN(127, .) would clamp.
 
             // the pack instructions work per 128 bit lane, so the four 8 byte
             // groups of each result are in the order 0,2,1,3 and need unpack

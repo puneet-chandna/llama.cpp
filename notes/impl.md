@@ -222,3 +222,77 @@ latency-bound rather than throughput-bound: A carries a `VCMPPS` + `VBLENDVPS`
 chain of about 6 cycles through all 32 iterations of pass 1, while B's `VMAXPS`
 chain is 4 cycles per iteration and is the only chain, and its repair pass exits
 after the first matching vector (half a block on average).
+
+## Variant C: four maximum chains, and no explicit clamp
+
+Two changes on top of variant B:
+
+1. **Four independent `VMAXPS` accumulators**, one per 8-element group of a 32
+   element iteration, merged with three `VMAXPS` at the end. A single chain
+   carries the 4-cycle `VMAXPS` latency through all 32 vectors of a block, i.e.
+   128 cycles, which is longer than the rest of the block costs. Four chains cut
+   the serial part to 8 x 4 = 32 cycles plus a 12-cycle merge. NaN neutrality is
+   preserved because every accumulator keeps the same operand order as in B, and
+   the merge only sees finite values.
+2. **The `_mm256_min_epi32` clamp is dropped.** It is exactly redundant:
+   `|iscale * x[j]| <= 127 * (1 + 2^-23)` because `|x[j]| <= |max|` (pass 2 only
+   runs when `amax` is finite and non-zero and `iscale` is finite), so
+   `VCVTPS2DQ` already returns a value in `[-127, 127]`, and where
+   `MIN(127, v)` would clamp at the top `VPACKSSWD`/`VPACKSSWB` saturate to 127 in
+   exactly the same place. Removing it saves 8 uops per 64 elements.
+
+The clamp removal is the only change in the whole experiment that relaxes the
+literal correspondence to the reference, so it is worth stating what it does *not*
+cover: for `v < -128` the reference's `int8_t` conversion wraps modulo 256 while
+the saturating pack returns `-128`. That case is unreachable given the bound
+above, and the `clamp_edge` corpus - which builds blocks with `iscale` exactly
+`1.0f` and elements at `+-127.0`, `+-126.9999` and every exact half-integer up to
+`+-126.5` - reports 0 mismatches over the full run, so the bound holds in practice
+as well as on paper.
+
+Codegen: 161 lines for the whole function, unchanged shape from B except that the
+pass 1 loop now handles 32 elements per iteration with 4 `VMAXPS`, `vpminsd` is
+gone, and there are still exactly 2 stack references, both outside all loops.
+Forbidden opcodes (FMA, AVX-VNNI, F16C, AVX-512): none. Calls: 1.
+
+### Variant B vs variant C
+
+Both builds live in one session (B in `build/release`, C in a copied `bin`
+directory selected through `LD_LIBRARY_PATH`, which overrides the CMake `RUNPATH` -
+verified with `ldd`), run alternately in **both** orders to rule out a warm-up
+bias, 31 repetitions, times in ns:
+
+| k | B (round 1/2/3, order B first) | C (same rounds) | B (C first) | C (C first) |
+|---|---|---|---|---|
+| 2048 | 760 / 778 / 817 | 599 / 484 / 451 | 593 / 620 / 638 | 491 / 382 / 392 |
+| 3072 | 1236 / 1217 / 1360 | 884 / 744 / 695 | 912 / 1018 / 1018 | 769 / 590 / 601 |
+| 8192 | 2497 / 3153 / 2792 | 1854 / 1907 / 1791 | 2363 / 2653 / 2632 | 1553 / 1509 / 1549 |
+
+C is faster in every one of the 18 pairs, by 1.5-1.9x, and the effect survives the
+order reversal, so it is not a warm-up artefact. The commit holds a rebuild whose
+`libggml-cpu.so` is **byte-identical** to the library that produced these numbers
+(`sha256 4b22e113c6db9e3610f32fce28ec301cc9dcf5abdf987559213eafe0a055c00f`).
+
+### Final kernel measurements (variant C)
+
+`--impl both --reps 41`, paired per repetition:
+
+| k | ref ns | candidate ns | paired ratio | ratio sd |
+|---|---|---|---|---|
+| 256 | 557 | 77 | 7.21x | 0.34 |
+| 512 | 1095 | 136 | 8.04x | 0.24 |
+| 1024 | 2186 | 249 | 8.81x | 0.22 |
+| 2048 | 3554 | 400 | 8.89x | 0.97 |
+| 3072 | 5491 | 578 | 9.53x | 0.13 |
+| 4096 | 7296 | 787 | 9.25x | 0.51 |
+| 8192 | 15011 | 1565 | 9.66x | 0.35 |
+| 32768 | 57825 | 6056 | 9.55x | 0.43 |
+
+The two `k` values that occur in the models used end to end are `k = 2048` (1B and
+7B `n_embd`) and `k = 3072` (3B `n_embd`): **8.89x and 9.53x**. The candidate
+reaches 0.185-0.25 ns per element from `k = 1024` upwards, i.e. under one cycle per
+element.
+
+Correctness at this stage: `simd-diff --corpus all --blocks 50000` = 0 mismatches
+on all 15 corpora (about 890 000 blocks), `simd-diff --self-test` passes.
+Full verification is phase 5.
