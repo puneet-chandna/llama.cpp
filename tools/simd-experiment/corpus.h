@@ -25,6 +25,7 @@ enum class Corpus {
     Inf,
     Nan,
     MixedNonfinite,
+    NanMix,
     ClampEdge,
     RandomMix,
     Unaligned, // same values as Uniform, caller applies 1..31 byte pointer offsets
@@ -49,6 +50,7 @@ static const corpus_entry CORPUS_TABLE[] = {
     { "inf",             Corpus::Inf             },
     { "nan",             Corpus::Nan             },
     { "mixed_nonfinite", Corpus::MixedNonfinite  },
+    { "nan_mix",         Corpus::NanMix          },
     { "clamp_edge",      Corpus::ClampEdge       },
     { "unaligned",       Corpus::Unaligned       },
     { "odd_k",           Corpus::OddK            },
@@ -235,6 +237,24 @@ static void corpus_fill_block(Corpus c, float * x, int64_t n, Rng & rng) {
                     case 2: x[j] = -INFINITY; break;
                     default: x[j] = f_from_bits(0xffc00000u | (rng.next_u32() & 0x000fffffu)); break;
                 }
+            }
+            break;
+        case Corpus::NanMix:
+            // Finite values with a finite maximum, plus a few NaNs scattered in.
+            // This is the case the "nan" and "mixed_nonfinite" corpora do not
+            // reach: the block maximum stays finite, so an implementation that
+            // keeps its fast path here has to reproduce the reference's payload
+            // dependent nearest_int(NaN) result for the NaN elements. libFuzzer
+            // found exactly this shape (a mutated clamp_edge block with six NaNs
+            // added) after 53 executions; see notes/verification.md.
+            for (int64_t j = 0; j < n; ++j) {
+                x[j] = rng.next_sym();
+            }
+            for (int64_t k = 0; k < n/32 + 1; ++k) {
+                const int64_t  at   = (int64_t) rng.below((uint32_t) n);
+                const uint32_t mant = (rng.next_u32() & 0x007fffffu) | 1u;
+                const uint32_t sign = rng.next_u32() & 0x80000000u;
+                x[at] = f_from_bits(sign | 0x7f800000u | mant);
             }
             break;
         case Corpus::ClampEdge:

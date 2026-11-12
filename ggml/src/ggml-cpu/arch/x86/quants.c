@@ -514,49 +514,56 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
         const __m256 sign_bit = _mm256_set1_ps(-0.0f);
 
-        // Four independent chains, then one merge: a single chain would carry the
-        // 4 cycle VMAXPS latency through all 32 vectors, which is longer than the
-        // rest of the block costs together.
-        //
-        // The new value is the first operand and the running maximum the second
-        // one on purpose: VMAXPS returns its second operand when either input is
-        // NaN, so a NaN cannot replace the maximum, as in the reference's
-        // "ax > amax". All lanes stay finite.
-        __m256 amax0 = _mm256_setzero_ps();
-        __m256 amax1 = _mm256_setzero_ps();
-        __m256 amax2 = _mm256_setzero_ps();
-        __m256 amax3 = _mm256_setzero_ps();
+        // The maximum is taken in the integer domain, in four independent chains
+        // merged at the end. For non-negative finite floats the bit patterns order
+        // like the values, so an integer maximum is the exact float maximum here,
+        // and unlike VMAXPS it has no NaN special case: every NaN pattern is
+        // larger than +infinity, so the compare below detects it for free.
+        __m256i imax0 = _mm256_setzero_si256();
+        __m256i imax1 = _mm256_setzero_si256();
+        __m256i imax2 = _mm256_setzero_si256();
+        __m256i imax3 = _mm256_setzero_si256();
         for (int it = 0; it < QK_K/32; ++it) {
-            const __m256 a0 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  0));
-            const __m256 a1 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  8));
-            const __m256 a2 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 16));
-            const __m256 a3 = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 24));
-            amax0 = _mm256_max_ps(a0, amax0);
-            amax1 = _mm256_max_ps(a1, amax1);
-            amax2 = _mm256_max_ps(a2, amax2);
-            amax3 = _mm256_max_ps(a3, amax3);
+            const __m256i a0 = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  0)));
+            const __m256i a1 = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it +  8)));
+            const __m256i a2 = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 16)));
+            const __m256i a3 = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 24)));
+            imax0 = _mm256_max_epi32(imax0, a0);
+            imax1 = _mm256_max_epi32(imax1, a1);
+            imax2 = _mm256_max_epi32(imax2, a2);
+            imax3 = _mm256_max_epi32(imax3, a3);
         }
-        const __m256 amaxv = _mm256_max_ps(_mm256_max_ps(amax0, amax1), _mm256_max_ps(amax2, amax3));
-        __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(amaxv), _mm256_extractf128_ps(amaxv, 1));
-        m4 = _mm_max_ps(m4, _mm_movehl_ps(m4, m4));
-        m4 = _mm_max_ss(m4, _mm_movehdup_ps(m4));
-        const float amax = _mm_cvtss_f32(m4);
+        __m256i imaxv = _mm256_max_epi32(_mm256_max_epi32(imax0, imax1), _mm256_max_epi32(imax2, imax3));
+        imaxv = _mm256_max_epi32(imaxv, _mm256_shuffle_epi32(imaxv, _MM_SHUFFLE(2, 3, 0, 1)));
+        imaxv = _mm256_max_epi32(imaxv, _mm256_shuffle_epi32(imaxv, _MM_SHUFFLE(1, 0, 3, 2)));
+        imaxv = _mm256_max_epi32(imaxv, _mm256_permute2x128_si256(imaxv, imaxv, 1));
+        const uint32_t imax = (uint32_t) _mm_cvtsi128_si32(_mm256_castsi256_si128(imaxv));
 
-        // Locate the first element of the block with |x| == amax. The reference
-        // keeps that one, and it decides the sign of iscale. NaN never matches,
-        // so an all NaN block ends with best < 0 and takes the reference path.
-        const __m256 amax_b = _mm256_set1_ps(amax);
+        // 0x7f800000 is +infinity and every NaN pattern is above it. The reference's
+        // nearest_int() is undefined on those: it adds 1.5*2^23 to the product and
+        // reads the mantissa of the result, so the value depends on the NaN payload
+        // (a quiet NaN with payload 0x400000 gives 0, one with 0x7fffff gives
+        // 4194303 and therefore 127 after MIN(127, .)). A block with an infinity or
+        // a NaN goes to the reference instead, which costs nothing for real
+        // activations and keeps the block bit-exact.
+        if (imax >= 0x7f800000u) {
+            quantize_row_q8_K_ref(xb, yb, QK_K);
+            continue;
+        }
+
+        // Locate the first element of the block with |x| == imax. The reference
+        // keeps that one, and it decides the sign of iscale.
+        const __m256i imax_b = _mm256_set1_epi32((int) imax);
         int best = -1;
         for (int it = 0; it < QK_K/8 && best < 0; ++it) {
-            const __m256 ax = _mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 8*it));
-            const unsigned int m = (unsigned int) _mm256_movemask_ps(_mm256_cmp_ps(ax, amax_b, _CMP_EQ_OQ));
+            const __m256i ax = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 8*it)));
+            const unsigned int m = (unsigned int) _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(ax, imax_b)));
             if (m != 0) {
                 best = 8*it + __builtin_ctz(m);
             }
         }
 
-        // All zero and all NaN blocks: the reference sets d = 0, zeroes qs and
-        // leaves bsums untouched.
+        // not reachable: imax was taken from this block, so some element matches
         if (best < 0) {
             quantize_row_q8_K_ref(xb, yb, QK_K);
             continue;
@@ -565,9 +572,10 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         // xb[best] is the value the reference stores in max
         const float xmax   = xb[best];
         const float iscale = -127.f/xmax;
-        // Infinite and denormal maxima need the reference too: a denormal max
-        // overflows iscale to infinity, where the reference stores zeros.
-        if (!(isfinite(xmax) && isfinite(iscale))) {
+        // A denormal maximum overflows iscale to infinity, and an all zero block
+        // gives xmax = 0 and iscale = +-infinity. The reference stores zeros for
+        // the first and takes its !amax branch for the second.
+        if (!isfinite(iscale)) {
             quantize_row_q8_K_ref(xb, yb, QK_K);
             continue;
         }

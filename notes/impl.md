@@ -273,7 +273,7 @@ order reversal, so it is not a warm-up artefact. The commit holds a rebuild whos
 `libggml-cpu.so` is **byte-identical** to the library that produced these numbers
 (`sha256 4b22e113c6db9e3610f32fce28ec301cc9dcf5abdf987559213eafe0a055c00f`).
 
-### Final kernel measurements (variant C)
+### Measurements at the variant C stage (superseded by variant D, kept for history)
 
 `--impl both --reps 41`, paired per repetition:
 
@@ -296,3 +296,108 @@ element.
 Correctness at this stage: `simd-diff --corpus all --blocks 50000` = 0 mismatches
 on all 15 corpora (about 890 000 blocks), `simd-diff --self-test` passes.
 Full verification is phase 5.
+
+## Variant D: integer domain maximum, and NaN detection for free
+
+**This section is a bug found by libFuzzer, in all of variants A, B and C.**
+
+The first fuzz run (phase 5, `notes/run_fuzz.sh`) aborted after 53 executions:
+
+```
+MISMATCH k=1024 nb=4 x_off=3 y_off=12 first_byte=1125 ref=0x7f candidate=0x80
+```
+
+Byte 1125 is `qs[233]` of block 3: the reference stored `+127`, the kernel stored
+`-128`. The block contains six NaNs (indices 233, 234, 241, 242, 249, 250) and its
+maximum is the finite value `-127.0f` at index 0 (the input is a mutated
+`clamp_edge` block, which is why the maximum is exactly 127).
+
+Root cause, and the reason the corpora missed it:
+
+- For a NaN element the reference evaluates `nearest_int(iscale*NaN)`. That is
+  `(bits(NaN) & 0x7fffff) - 0x400000`, i.e. **a function of the NaN payload**:
+  a quiet NaN with payload `0x400000` gives 0, one with payload `0x7fffff` gives
+  4194303 and therefore `MIN(127, 4194303) = 127`.
+- The kernel evaluated `VCVTPS2DQ(NaN)`, which returns the invalid-operation
+  sentinel `INT_MIN`; the saturating pack turned that into `-128`. Reinstating the
+  `VPMINSD` clamp does not help, because `min(INT_MIN, 127)` is still `INT_MIN`.
+- Variants A, B and C are all affected: they differ in how the maximum is found,
+  not in how NaN products are quantized.
+- The bound argument used to justify removing the clamp ("`|iscale*x| <= 127`
+  because `|x| <= |max|`") silently assumed **finite** products. It is a correct
+  argument only once non-finite elements are excluded from the block.
+- Every corpus designed in phase 3 missed it: the `nan` corpus is all-NaN, so its
+  maximum is 0 and the block takes the `!amax` path; `mixed_nonfinite` draws each
+  element from {finite, +Inf, -Inf, NaN}, so essentially every block contains an
+  infinity, which the guard already rejected. Nothing generated NaNs **together
+  with a finite maximum**. Reproduced on the pre-fix kernel with the new corpus:
+
+```
+$ simd-diff --corpus nan_mix --blocks 200 --quiet          # pre-fix variant A
+corpus=nan_mix         calls=200       blocks=200         mismatches=200
+$ simd-diff --corpus nan  --blocks 2000 --quiet            # pre-fix variant A
+total mismatches: 0
+$ simd-diff --corpus mixed_nonfinite --blocks 2000 --quiet # pre-fix variant A
+total mismatches: 0
+```
+
+The fix takes the block maximum in the **integer domain**:
+
+```c
+__m256i imax0 = _mm256_setzero_si256();  /* four chains, one per 8 element group */
+...
+const __m256i a0 = _mm256_castps_si256(_mm256_andnot_ps(sign_bit, _mm256_loadu_ps(xb + 32*it + 0)));
+imax0 = _mm256_max_epi32(imax0, a0);
+```
+
+- For non-negative finite floats the bit patterns order exactly like the values, so
+  an integer maximum is the exact float maximum here. `VPMAXSD` has no NaN special
+  case at all.
+- Every NaN pattern with the sign cleared is **above** `0x7f800000` (`+infinity`),
+  so one integer compare, `imax >= 0x7f800000`, rejects every block that contains an
+  infinity **or** a NaN and sends it to the reference. NaN detection is free: the
+  instruction count is the same as the float chain it replaces (`andnot` + `max`).
+- The repair pass also moved to the integer domain (`_mm256_cmpeq_epi32` +
+  `movemask` + `tzcnt`), so there is no `_CMP_EQ_OQ` subtlety left anywhere.
+- With Inf and NaN excluded, and `|x| <= amax` by construction, the pass 2 bound
+  `|iscale*x| <= 127 * (1 + 2^-23)` is now genuinely airtight, which is what makes
+  the clamp removal correct rather than merely plausible.
+
+The fix also made the kernel **faster**, since integer min/max is the cheaper
+opcode: `k=2048` went from 8.89x to 10.29x against the reference.
+
+Regression protection added:
+
+- corpus `nan_mix`: finite values with a finite maximum plus NaNs scattered in
+  (`n/32 + 1` of them, varying payloads and both signs). It fails 200/200 on the
+  pre-fix kernel and passes on the fixed one.
+- `notes/fuzz-seeds/fuzz-q8k-nan-finite-mix.bin`: the exact crashing input of
+  5914 bytes, archived and copied into the fuzz corpus by `notes/run_fuzz.sh`. It
+  replays clean on the fixed kernel (`fuzz-q8k -runs=1 <file>` exits 0).
+
+### Final kernel measurements (variant D, the committed kernel)
+
+`simd-bench --impl both --reps 41`, paired per repetition, GCC 15.2.0
+`-O2 -march=native`:
+
+| k | ref ns | candidate ns | paired ratio | ratio sd |
+|---|---|---|---|---|
+| 256 | 546 | 67 | 8.14x | 0.38 |
+| 512 | 1093 | 121 | 9.01x | 0.20 |
+| 1024 | 2167 | 222 | 9.77x | 0.88 |
+| **2048** | 3755 | 365 | **10.29x** | 1.09 |
+| **3072** | 5478 | 517 | **10.59x** | 0.92 |
+| 4096 | 7077 | 723 | 9.81x | 1.12 |
+| 8192 | 14598 | 1466 | 10.08x | 0.45 |
+| 32768 | 58127 | 6074 | 9.52x | 0.12 |
+
+`k = 2048` and `k = 3072` are the activation row lengths of the models used end to
+end. The candidate runs at 0.17-0.29 ns per element, roughly one cycle per element
+at the frequencies this host reaches under the `powersave` governor.
+
+Codegen of the committed kernel (GCC 15.2.0, `-O2 -march=native`): `vpmaxsd` for
+the maximum, zero `vmaxps` and zero `vpminsd`, `vpcmpeqd` + `movemask` + `tzcnt` in
+the repair pass, `vpmaddubsw`/`vpmaddwd`/`vphaddd` for `bsums`, no FMA/VNNI/F16C/
+AVX-512 opcode, one `call` (the degenerate-block fallback), and no stack access
+inside any loop. The same fingerprint holds in all six build configurations
+(release, gcc-o2, clang-o2, clang-o3, minfeat, asan).
