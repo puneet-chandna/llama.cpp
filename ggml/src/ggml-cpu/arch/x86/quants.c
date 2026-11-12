@@ -598,9 +598,9 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
             // cvtps2dq rounds to nearest even from MXCSR, which is what
             // nearest_int() does. The reference's MIN(127, v) needs no separate
-            // step: |iscale*x| <= 127 * (1 + 2^-23) because |x| <= |max|, so the
-            // value is already in range, and VPACKSSDW/VPACKSSWB saturate to 127
-            // in exactly the same place MIN(127, .) would clamp.
+            // step: |x| <= |max| keeps every product below 127.5, so cvtps2dq
+            // returns at most 127, and VPACKSSDW/VPACKSSWB saturate to 127 in
+            // exactly the same place MIN(127, .) would clamp.
 
             // the pack instructions work per 128 bit lane, so the four 8 byte
             // groups of each result are in the order 0,2,1,3 and need unpack
