@@ -33,8 +33,12 @@ SPECS="1B:models/Llama-3.2-1B-Instruct-Q4_K_M.gguf:512:128:2048
 7B:models/Qwen2.5-7B-Instruct-Q4_K_M.gguf:256:64:5200"
 
 run_one() { # bindir model pp tg repack
+    # llama-bench adds an "rpk" column to the markdown table when --repack is not
+    # the default, which shifts the fixed column indexes, so read the last two
+    # non-empty fields (test, then t/s) instead of fixed positions
     $PIN "$1/llama-bench" -m "$2" -p "$3" -n "$4" -t "$T" -r 1 --repack "$5" -o md 2>/dev/null \
-        | awk -F'|' '{ t=$7; v=$8; gsub(/^[ \t]+|[ \t]+$/,"",t); gsub(/^[ \t]+/,"",v); split(v,a," ");
+        | awk -F'|' '{ n=NF; while (n>0 && $n ~ /^[ \t]*$/) n--; t=$(n-1); v=$n
+                       gsub(/^[ \t]+|[ \t]+$/,"",t); gsub(/^[ \t]+/,"",v); split(v,a," ")
                        if (t ~ /^(pp|tg)[0-9]+$/) print t "," a[1] }'
 }
 
@@ -57,7 +61,7 @@ for spec in $SPECS; do
         continue
     fi
 
-    for rp in 1 0; do
+    for rp in ${RP_FILTER:-1 0}; do
         i=1
         while [ "$i" -le "$REPS" ]; do
             for side in before after; do
