@@ -359,9 +359,10 @@ imax0 = _mm256_max_epi32(imax0, a0);
   instruction count is the same as the float chain it replaces (`andnot` + `max`).
 - The repair pass also moved to the integer domain (`_mm256_cmpeq_epi32` +
   `movemask` + `tzcnt`), so there is no `_CMP_EQ_OQ` subtlety left anywhere.
-- With Inf and NaN excluded, and `|x| <= amax` by construction, the pass 2 bound
-  `|iscale*x| <= 127 * (1 + 2^-23)` is now genuinely airtight, which is what makes
-  the clamp removal correct rather than merely plausible.
+- With Inf and NaN excluded, and `|x| <= amax` by construction, the pass 2 product
+  stays below `127.5` (worst case `127 * (1 + 2^-24)^2` - the rounding threshold is
+  what matters, not the value `127` itself), which is what makes the clamp removal
+  correct rather than merely plausible.
 
 The fix also made the kernel **faster**, since integer min/max is the cheaper
 opcode: `k=2048` went from 8.89x to 10.29x against the reference.
